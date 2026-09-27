@@ -10,28 +10,16 @@ jobs:
       - name: 🚚 Get latest code
         uses: actions/checkout@v6
 
-      - name: 🐘 Setup PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.2'   # sesuaikan dengan versi PHP di hosting
-          tools: composer
-          coverage: none
-
-      - name: 📦 Composer Install
-        run: |
-          cd laravel   # sesuaikan path kalau folder laravel-nya bukan di root repo
-          composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist
-
-      - name: 🔄 Dump Autoload
-        run: |
-          cd laravel
-          composer dump-autoload --optimize --no-dev
-
       - name: 🟢 Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
+
+      - name: 🔍 Check Node.js
+        run: |
+          node -v
+          npm -v
 
       - name: 🔨 Build Project
         run: |
@@ -41,12 +29,6 @@ jobs:
       - name: 📂 Sync files
         uses: SamKirkland/FTP-Deploy-Action@v4.4.0
         with:
-          server: 103.126.232.28
+          server:  103.126.232.28
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          exclude: |
-            **/.git*
-            **/.git*/**
-            **/node_modules/**
-            **/.env
-            **/storage/logs/**
