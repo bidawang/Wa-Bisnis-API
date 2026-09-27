@@ -31,8 +31,18 @@ return [
         ],
     ],
     // config/services.php
+    
     'whatsapp' => [
         'verify_token' => env('WHATSAPP_VERIFY_TOKEN'),
-    ],
+
+        'access_token' => env('WHATSAPP_ACCESS_TOKEN'),
+
+        'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
+
+        'graph_api_version' => env(
+            'WHATSAPP_GRAPH_API_VERSION',
+            'v23.0'
+        ),
+],
 
 ];
