@@ -1,0 +1,1162 @@
+CAMPING RENTAL - LARAVEL ELOQUENT MODEL & RELATION REFERENCE
+==============================================================
+
+Database target: MySQL 8.0+
+Laravel: gunakan namespace App\\Models dan sesuaikan fillable/casts dengan kebutuhan aplikasi.
+
+DESAIN INTI
+-----------
+1. user -> tempat_sewa -> barang/paket
+2. barang -> barang_stok + foto + tutorial
+3. booking -> booking_detail -> barang/paket
+4. booking -> sewa -> sewa_detail
+5. tagihan menjadi pusat perhitungan nilai transaksi.
+6. pembayaran selalu mengacu ke tagihan.
+7. transaksi mencatat pergerakan uang pada dompet.
+8. stok_mutasi menyimpan histori perubahan stok.
+9. harga transaksi disimpan sebagai snapshot; perubahan harga master tidak mengubah transaksi lama.
+
+ATURAN TOTAL
+------------
+Detail:
+  subtotal       = jumlah * harga_satuan
+  diskon_nominal = hasil diskon aktual
+  total          = subtotal - diskon_nominal
+
+Tagihan:
+  subtotal        = SUM(tagihan_detail.total)
+  diskon_nominal  = diskon tagihan
+  total           = subtotal - diskon_nominal + biaya_tambahan
+  dibayar         = SUM(pembayaran yang bukan refund) - SUM(refund)
+  sisa            = total - dibayar
+
+DISKON
+------
+Diskon dapat berupa:
+  diskon_tipe  = nominal | persen
+  diskon_nilai = angka input user
+  diskon_nominal = nilai rupiah yang benar-benar diterapkan
+
+Contoh:
+  subtotal = 500000
+  diskon_tipe = persen
+  diskon_nilai = 10
+  diskon_nominal = 50000
+  biaya_tambahan = 25000
+  total = 475000
+
+Jangan menghitung ulang transaksi lama dari harga master barang/paket.
+Gunakan harga_satuan dan diskon_nominal yang sudah tersimpan pada detail/tagihan.
+
+==============================================================
+MODEL 01 - User.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Foundation\\Auth\\User as Authenticatable;
+use Illuminate\\Database\\Eloquent\\Relations\\HasMany;
+
+class User extends Authenticatable
+{
+    protected $table = 'user';
+    protected $primaryKey = 'id_user';
+    public $timestamps = true;
+
+    protected $fillable = [
+        'google_id', 'email', 'status', 'nama', 'no_hp', 'role', 'foto', 'alamat',
+    ];
+
+    public function tempatSewa(): HasMany
+    {
+        return $this->hasMany(TempatSewa::class, 'id_user', 'id_user');
+    }
+}
+
+==============================================================
+MODEL 02 - TempatSewa.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+use Illuminate\\Database\\Eloquent\\Relations\\HasMany;
+use Illuminate\\Database\\Eloquent\\Relations\\HasOne;
+
+class TempatSewa extends Model
+{
+    protected $table = 'tempat_sewa';
+    protected $primaryKey = 'id_tempat';
+
+    protected $fillable = [
+        'id_user', 'nama_tempat', 'alamat', 'no_hp', 'status',
+    ];
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'id_user', 'id_user');
+    }
+
+    public function barang(): HasMany
+    {
+        return $this->hasMany(Barang::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function paket(): HasMany
+    {
+        return $this->hasMany(Paket::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function booking(): HasMany
+    {
+        return $this->hasMany(Booking::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function sewa(): HasMany
+    {
+        return $this->hasMany(Sewa::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function tagihan(): HasMany
+    {
+        return $this->hasMany(Tagihan::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function dompet(): HasOne
+    {
+        return $this->hasOne(Dompet::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function barangMasuk(): HasMany
+    {
+        return $this->hasMany(BarangMasuk::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function transaksi(): HasMany
+    {
+        return $this->hasMany(Transaksi::class, 'id_tempat', 'id_tempat');
+    }
+}
+
+==============================================================
+MODEL 03 - Barang.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+use Illuminate\\Database\\Eloquent\\Relations\\HasMany;
+use Illuminate\\Database\\Eloquent\\Relations\\HasOne;
+
+class Barang extends Model
+{
+    protected $table = 'barang';
+    protected $primaryKey = 'id_barang';
+
+    protected $fillable = [
+        'id_tempat', 'nama', 'satuan', 'jenis', 'harga', 'deskripsi', 'status',
+    ];
+
+    protected $casts = [
+        'harga' => 'decimal:2',
+    ];
+
+    public function tempatSewa(): BelongsTo
+    {
+        return $this->belongsTo(TempatSewa::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function stok(): HasOne
+    {
+        return $this->hasOne(BarangStok::class, 'id_barang', 'id_barang');
+    }
+
+    public function foto(): HasMany
+    {
+        return $this->hasMany(BarangFoto::class, 'id_barang', 'id_barang');
+    }
+
+    public function tutorial(): HasMany
+    {
+        return $this->hasMany(BarangTutorial::class, 'id_barang', 'id_barang');
+    }
+
+    public function paketDetail(): HasMany
+    {
+        return $this->hasMany(PaketDetail::class, 'id_barang', 'id_barang');
+    }
+
+    public function bookingDetail(): HasMany
+    {
+        return $this->hasMany(BookingDetail::class, 'id_barang', 'id_barang');
+    }
+
+    public function sewaDetail(): HasMany
+    {
+        return $this->hasMany(SewaDetail::class, 'id_barang', 'id_barang');
+    }
+
+    public function tagihanDetail(): HasMany
+    {
+        return $this->hasMany(TagihanDetail::class, 'id_barang', 'id_barang');
+    }
+
+    public function stokMutasi(): HasMany
+    {
+        return $this->hasMany(StokMutasi::class, 'id_barang', 'id_barang');
+    }
+
+    public function barangMasukDetail(): HasMany
+    {
+        return $this->hasMany(BarangMasukDetail::class, 'id_barang', 'id_barang');
+    }
+}
+
+==============================================================
+MODEL 04 - BarangStok.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+
+class BarangStok extends Model
+{
+    protected $table = 'barang_stok';
+    protected $primaryKey = 'id_barang_stok';
+    public $timestamps = false;
+
+    protected $fillable = [
+        'id_barang', 'jumlah_total', 'jumlah_tersedia', 'jumlah_dipesan',
+        'jumlah_disewa', 'jumlah_rusak', 'jumlah_hilang', 'updated_at',
+    ];
+
+    protected $casts = [
+        'jumlah_total' => 'integer',
+        'jumlah_tersedia' => 'integer',
+        'jumlah_dipesan' => 'integer',
+        'jumlah_disewa' => 'integer',
+        'jumlah_rusak' => 'integer',
+        'jumlah_hilang' => 'integer',
+    ];
+
+    public function barang(): BelongsTo
+    {
+        return $this->belongsTo(Barang::class, 'id_barang', 'id_barang');
+    }
+}
+
+==============================================================
+MODEL 05 - StokMutasi.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+
+class StokMutasi extends Model
+{
+    protected $table = 'stok_mutasi';
+    protected $primaryKey = 'id_stok_mutasi';
+    public $timestamps = false;
+
+    protected $fillable = [
+        'id_barang', 'id_booking', 'id_sewa', 'tipe', 'jumlah', 'keterangan', 'created_at',
+    ];
+
+    protected $casts = [
+        'jumlah' => 'integer',
+        'created_at' => 'datetime',
+    ];
+
+    public function barang(): BelongsTo
+    {
+        return $this->belongsTo(Barang::class, 'id_barang', 'id_barang');
+    }
+
+    public function booking(): BelongsTo
+    {
+        return $this->belongsTo(Booking::class, 'id_booking', 'id_booking');
+    }
+
+    public function sewa(): BelongsTo
+    {
+        return $this->belongsTo(Sewa::class, 'id_sewa', 'id_sewa');
+    }
+}
+
+==============================================================
+MODEL 06 - BarangFoto.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+
+class BarangFoto extends Model
+{
+    protected $table = 'barang_foto';
+    protected $primaryKey = 'id_foto';
+
+    protected $fillable = ['id_barang', 'foto', 'is_utama', 'urutan'];
+
+    protected $casts = [
+        'is_utama' => 'boolean',
+        'urutan' => 'integer',
+    ];
+
+    public function barang(): BelongsTo
+    {
+        return $this->belongsTo(Barang::class, 'id_barang', 'id_barang');
+    }
+}
+
+==============================================================
+MODEL 07 - BarangTutorial.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+
+class BarangTutorial extends Model
+{
+    protected $table = 'barang_tutorial';
+    protected $primaryKey = 'id_tutorial';
+
+    protected $fillable = [
+        'id_barang', 'judul', 'deskripsi', 'video_url', 'konten', 'urutan', 'status',
+    ];
+
+    public function barang(): BelongsTo
+    {
+        return $this->belongsTo(Barang::class, 'id_barang', 'id_barang');
+    }
+}
+
+==============================================================
+MODEL 08 - Paket.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+use Illuminate\\Database\\Eloquent\\Relations\\HasMany;
+
+class Paket extends Model
+{
+    protected $table = 'paket';
+    protected $primaryKey = 'id_paket';
+
+    protected $fillable = [
+        'id_tempat', 'nama_paket', 'deskripsi', 'harga_normal', 'harga_paket',
+        'diskon', 'status', 'foto',
+    ];
+
+    protected $casts = [
+        'harga_normal' => 'decimal:2',
+        'harga_paket' => 'decimal:2',
+        'diskon' => 'decimal:2',
+    ];
+
+    public function tempatSewa(): BelongsTo
+    {
+        return $this->belongsTo(TempatSewa::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function detail(): HasMany
+    {
+        return $this->hasMany(PaketDetail::class, 'id_paket', 'id_paket');
+    }
+
+    public function bookingDetail(): HasMany
+    {
+        return $this->hasMany(BookingDetail::class, 'id_paket', 'id_paket');
+    }
+
+    public function sewaDetail(): HasMany
+    {
+        return $this->hasMany(SewaDetail::class, 'id_paket', 'id_paket');
+    }
+
+    public function tagihanDetail(): HasMany
+    {
+        return $this->hasMany(TagihanDetail::class, 'id_paket', 'id_paket');
+    }
+}
+
+==============================================================
+MODEL 09 - PaketDetail.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+
+class PaketDetail extends Model
+{
+    protected $table = 'paket_detail';
+    protected $primaryKey = 'id_detail';
+
+    protected $fillable = ['id_paket', 'id_barang', 'jumlah'];
+
+    protected $casts = ['jumlah' => 'integer'];
+
+    public function paket(): BelongsTo
+    {
+        return $this->belongsTo(Paket::class, 'id_paket', 'id_paket');
+    }
+
+    public function barang(): BelongsTo
+    {
+        return $this->belongsTo(Barang::class, 'id_barang', 'id_barang');
+    }
+}
+
+==============================================================
+MODEL 10 - Booking.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+use Illuminate\\Database\\Eloquent\\Relations\\HasMany;
+use Illuminate\\Database\\Eloquent\\Relations\\HasOne;
+
+class Booking extends Model
+{
+    protected $table = 'booking';
+    protected $primaryKey = 'id_booking';
+
+    protected $fillable = [
+        'id_tempat', 'kode_booking', 'google_id', 'nama', 'no_hp',
+        'tanggal_mulai', 'tanggal_selesai', 'catatan', 'status',
+    ];
+
+    protected $casts = [
+        'tanggal_mulai' => 'date',
+        'tanggal_selesai' => 'date',
+    ];
+
+    public function tempatSewa(): BelongsTo
+    {
+        return $this->belongsTo(TempatSewa::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function detail(): HasMany
+    {
+        return $this->hasMany(BookingDetail::class, 'id_booking', 'id_booking');
+    }
+
+    public function cancel(): HasMany
+    {
+        return $this->hasMany(BookingCancel::class, 'id_booking', 'id_booking');
+    }
+
+    public function sewa(): HasOne
+    {
+        return $this->hasOne(Sewa::class, 'id_booking', 'id_booking');
+    }
+
+    public function bookingToSewa(): HasOne
+    {
+        return $this->hasOne(BookingToSewa::class, 'id_booking', 'id_booking');
+    }
+
+    public function tagihan(): HasOne
+    {
+        return $this->hasOne(Tagihan::class, 'id_booking', 'id_booking');
+    }
+
+    public function stokMutasi(): HasMany
+    {
+        return $this->hasMany(StokMutasi::class, 'id_booking', 'id_booking');
+    }
+}
+
+==============================================================
+MODEL 11 - BookingDetail.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+
+class BookingDetail extends Model
+{
+    protected $table = 'booking_detail';
+    protected $primaryKey = 'id_booking_detail';
+
+    protected $fillable = [
+        'id_booking', 'id_barang', 'id_paket', 'jumlah', 'harga_satuan',
+        'diskon_tipe', 'diskon_nilai', 'diskon_nominal', 'subtotal', 'total', 'catatan',
+    ];
+
+    protected $casts = [
+        'jumlah' => 'integer',
+        'harga_satuan' => 'decimal:2',
+        'diskon_nilai' => 'decimal:2',
+        'diskon_nominal' => 'decimal:2',
+        'subtotal' => 'decimal:2',
+        'total' => 'decimal:2',
+    ];
+
+    public function booking(): BelongsTo
+    {
+        return $this->belongsTo(Booking::class, 'id_booking', 'id_booking');
+    }
+
+    public function barang(): BelongsTo
+    {
+        return $this->belongsTo(Barang::class, 'id_barang', 'id_barang');
+    }
+
+    public function paket(): BelongsTo
+    {
+        return $this->belongsTo(Paket::class, 'id_paket', 'id_paket');
+    }
+}
+
+==============================================================
+MODEL 12 - BookingCancel.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+
+class BookingCancel extends Model
+{
+    protected $table = 'booking_cancel';
+    protected $primaryKey = 'id_cancel';
+    public $timestamps = false;
+
+    protected $fillable = ['id_booking', 'alasan', 'waktu_batal'];
+
+    protected $casts = ['waktu_batal' => 'datetime'];
+
+    public function booking(): BelongsTo
+    {
+        return $this->belongsTo(Booking::class, 'id_booking', 'id_booking');
+    }
+}
+
+==============================================================
+MODEL 13 - Sewa.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+use Illuminate\\Database\\Eloquent\\Relations\\HasMany;
+use Illuminate\\Database\\Eloquent\\Relations\\HasOne;
+
+class Sewa extends Model
+{
+    protected $table = 'sewa';
+    protected $primaryKey = 'id_sewa';
+
+    protected $fillable = [
+        'id_tempat', 'id_booking', 'kode_sewa', 'google_id', 'nama_penyewa', 'no_hp',
+        'tanggal_mulai', 'tanggal_rencana_kembali', 'tanggal_kembali', 'jaminan',
+        'catatan', 'status',
+    ];
+
+    protected $casts = [
+        'tanggal_mulai' => 'date',
+        'tanggal_rencana_kembali' => 'date',
+        'tanggal_kembali' => 'date',
+    ];
+
+    public function tempatSewa(): BelongsTo
+    {
+        return $this->belongsTo(TempatSewa::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function booking(): BelongsTo
+    {
+        return $this->belongsTo(Booking::class, 'id_booking', 'id_booking');
+    }
+
+    public function detail(): HasMany
+    {
+        return $this->hasMany(SewaDetail::class, 'id_sewa', 'id_sewa');
+    }
+
+    public function bookingToSewa(): HasOne
+    {
+        return $this->hasOne(BookingToSewa::class, 'id_sewa', 'id_sewa');
+    }
+
+    public function tagihan(): HasOne
+    {
+        return $this->hasOne(Tagihan::class, 'id_sewa', 'id_sewa');
+    }
+
+    public function stokMutasi(): HasMany
+    {
+        return $this->hasMany(StokMutasi::class, 'id_sewa', 'id_sewa');
+    }
+}
+
+==============================================================
+MODEL 14 - SewaDetail.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+
+class SewaDetail extends Model
+{
+    protected $table = 'sewa_detail';
+    protected $primaryKey = 'id_sewa_detail';
+
+    protected $fillable = [
+        'id_sewa', 'id_barang', 'id_paket', 'jumlah', 'harga_satuan',
+        'diskon_tipe', 'diskon_nilai', 'diskon_nominal', 'subtotal', 'total', 'catatan',
+    ];
+
+    protected $casts = [
+        'jumlah' => 'integer',
+        'harga_satuan' => 'decimal:2',
+        'diskon_nilai' => 'decimal:2',
+        'diskon_nominal' => 'decimal:2',
+        'subtotal' => 'decimal:2',
+        'total' => 'decimal:2',
+    ];
+
+    public function sewa(): BelongsTo
+    {
+        return $this->belongsTo(Sewa::class, 'id_sewa', 'id_sewa');
+    }
+
+    public function barang(): BelongsTo
+    {
+        return $this->belongsTo(Barang::class, 'id_barang', 'id_barang');
+    }
+
+    public function paket(): BelongsTo
+    {
+        return $this->belongsTo(Paket::class, 'id_paket', 'id_paket');
+    }
+}
+
+==============================================================
+MODEL 15 - BookingToSewa.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+
+class BookingToSewa extends Model
+{
+    protected $table = 'booking_to_sewa';
+    protected $primaryKey = 'id';
+    public $timestamps = false;
+
+    protected $fillable = ['id_booking', 'id_sewa', 'created_at'];
+
+    protected $casts = ['created_at' => 'datetime'];
+
+    public function booking(): BelongsTo
+    {
+        return $this->belongsTo(Booking::class, 'id_booking', 'id_booking');
+    }
+
+    public function sewa(): BelongsTo
+    {
+        return $this->belongsTo(Sewa::class, 'id_sewa', 'id_sewa');
+    }
+}
+
+==============================================================
+MODEL 16 - BarangMasuk.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+use Illuminate\\Database\\Eloquent\\Relations\\HasMany;
+
+class BarangMasuk extends Model
+{
+    protected $table = 'barang_masuk';
+    protected $primaryKey = 'id_barang_masuk';
+
+    protected $fillable = [
+        'id_tempat', 'kode_masuk', 'supplier', 'total_harga', 'keterangan',
+    ];
+
+    protected $casts = ['total_harga' => 'decimal:2'];
+
+    public function tempatSewa(): BelongsTo
+    {
+        return $this->belongsTo(TempatSewa::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function detail(): HasMany
+    {
+        return $this->hasMany(BarangMasukDetail::class, 'id_barang_masuk', 'id_barang_masuk');
+    }
+}
+
+==============================================================
+MODEL 17 - BarangMasukDetail.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+
+class BarangMasukDetail extends Model
+{
+    protected $table = 'barang_masuk_detail';
+    protected $primaryKey = 'id_detail';
+
+    protected $fillable = [
+        'id_barang_masuk', 'id_barang', 'jumlah', 'harga_beli', 'subtotal', 'kondisi', 'keterangan',
+    ];
+
+    protected $casts = [
+        'jumlah' => 'integer',
+        'harga_beli' => 'decimal:2',
+        'subtotal' => 'decimal:2',
+    ];
+
+    public function barangMasuk(): BelongsTo
+    {
+        return $this->belongsTo(BarangMasuk::class, 'id_barang_masuk', 'id_barang_masuk');
+    }
+
+    public function barang(): BelongsTo
+    {
+        return $this->belongsTo(Barang::class, 'id_barang', 'id_barang');
+    }
+}
+
+==============================================================
+MODEL 18 - Tagihan.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+use Illuminate\\Database\\Eloquent\\Relations\\HasMany;
+
+class Tagihan extends Model
+{
+    protected $table = 'tagihan';
+    protected $primaryKey = 'id_tagihan';
+
+    protected $fillable = [
+        'id_tempat', 'id_booking', 'id_sewa', 'kode_tagihan', 'subtotal',
+        'diskon_tipe', 'diskon_nilai', 'diskon_nominal', 'biaya_tambahan',
+        'total', 'dibayar', 'sisa', 'status', 'catatan',
+    ];
+
+    protected $casts = [
+        'subtotal' => 'decimal:2',
+        'diskon_nilai' => 'decimal:2',
+        'diskon_nominal' => 'decimal:2',
+        'biaya_tambahan' => 'decimal:2',
+        'total' => 'decimal:2',
+        'dibayar' => 'decimal:2',
+        'sisa' => 'decimal:2',
+    ];
+
+    public function tempatSewa(): BelongsTo
+    {
+        return $this->belongsTo(TempatSewa::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function booking(): BelongsTo
+    {
+        return $this->belongsTo(Booking::class, 'id_booking', 'id_booking');
+    }
+
+    public function sewa(): BelongsTo
+    {
+        return $this->belongsTo(Sewa::class, 'id_sewa', 'id_sewa');
+    }
+
+    public function detail(): HasMany
+    {
+        return $this->hasMany(TagihanDetail::class, 'id_tagihan', 'id_tagihan');
+    }
+
+    public function pembayaran(): HasMany
+    {
+        return $this->hasMany(Pembayaran::class, 'id_tagihan', 'id_tagihan');
+    }
+}
+
+==============================================================
+MODEL 19 - TagihanDetail.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+
+class TagihanDetail extends Model
+{
+    protected $table = 'tagihan_detail';
+    protected $primaryKey = 'id_tagihan_detail';
+
+    protected $fillable = [
+        'id_tagihan', 'id_barang', 'id_paket', 'nama_item', 'jumlah',
+        'harga_satuan', 'diskon_tipe', 'diskon_nilai', 'diskon_nominal',
+        'subtotal', 'total',
+    ];
+
+    protected $casts = [
+        'jumlah' => 'integer',
+        'harga_satuan' => 'decimal:2',
+        'diskon_nilai' => 'decimal:2',
+        'diskon_nominal' => 'decimal:2',
+        'subtotal' => 'decimal:2',
+        'total' => 'decimal:2',
+    ];
+
+    public function tagihan(): BelongsTo
+    {
+        return $this->belongsTo(Tagihan::class, 'id_tagihan', 'id_tagihan');
+    }
+
+    public function barang(): BelongsTo
+    {
+        return $this->belongsTo(Barang::class, 'id_barang', 'id_barang');
+    }
+
+    public function paket(): BelongsTo
+    {
+        return $this->belongsTo(Paket::class, 'id_paket', 'id_paket');
+    }
+}
+
+==============================================================
+MODEL 20 - Pembayaran.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+use Illuminate\\Database\\Eloquent\\Relations\\HasOne;
+
+class Pembayaran extends Model
+{
+    protected $table = 'pembayaran';
+    protected $primaryKey = 'id_pembayaran';
+
+    protected $fillable = [
+        'id_tagihan', 'metode', 'jenis', 'jumlah', 'referensi', 'keterangan',
+    ];
+
+    protected $casts = ['jumlah' => 'decimal:2'];
+
+    public function tagihan(): BelongsTo
+    {
+        return $this->belongsTo(Tagihan::class, 'id_tagihan', 'id_tagihan');
+    }
+
+    public function transaksi(): HasOne
+    {
+        return $this->hasOne(Transaksi::class, 'id_pembayaran', 'id_pembayaran');
+    }
+}
+
+==============================================================
+MODEL 21 - Dompet.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+use Illuminate\\Database\\Eloquent\\Relations\\HasMany;
+
+class Dompet extends Model
+{
+    protected $table = 'dompet';
+    protected $primaryKey = 'id_dompet';
+
+    protected $fillable = ['id_tempat', 'saldo'];
+
+    protected $casts = ['saldo' => 'decimal:2'];
+
+    public function tempatSewa(): BelongsTo
+    {
+        return $this->belongsTo(TempatSewa::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function transaksi(): HasMany
+    {
+        return $this->hasMany(Transaksi::class, 'id_dompet', 'id_dompet');
+    }
+}
+
+==============================================================
+MODEL 22 - Transaksi.php
+==============================================================
+<?php
+
+namespace App\\Models;
+
+use Illuminate\\Database\\Eloquent\\Model;
+use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;
+
+class Transaksi extends Model
+{
+    protected $table = 'transaksi';
+    protected $primaryKey = 'id_transaksi';
+
+    protected $fillable = [
+        'id_tempat', 'id_dompet', 'id_pembayaran', 'jumlah', 'tipe', 'keterangan',
+    ];
+
+    protected $casts = ['jumlah' => 'decimal:2'];
+
+    public function tempatSewa(): BelongsTo
+    {
+        return $this->belongsTo(TempatSewa::class, 'id_tempat', 'id_tempat');
+    }
+
+    public function dompet(): BelongsTo
+    {
+        return $this->belongsTo(Dompet::class, 'id_dompet', 'id_dompet');
+    }
+
+    public function pembayaran(): BelongsTo
+    {
+        return $this->belongsTo(Pembayaran::class, 'id_pembayaran', 'id_pembayaran');
+    }
+}
+
+==============================================================
+RELATION MAP / CHEAT SHEET
+==============================================================
+
+User
+  hasMany TempatSewa
+
+TempatSewa
+  belongsTo User
+  hasMany Barang
+  hasMany Paket
+  hasMany Booking
+  hasMany Sewa
+  hasMany Tagihan
+  hasOne Dompet
+  hasMany BarangMasuk
+  hasMany Transaksi
+
+Barang
+  belongsTo TempatSewa
+  hasOne BarangStok
+  hasMany BarangFoto
+  hasMany BarangTutorial
+  hasMany PaketDetail
+  hasMany BookingDetail
+  hasMany SewaDetail
+  hasMany TagihanDetail
+  hasMany StokMutasi
+  hasMany BarangMasukDetail
+
+BarangStok
+  belongsTo Barang
+
+StokMutasi
+  belongsTo Barang
+  belongsTo Booking (nullable)
+  belongsTo Sewa (nullable)
+
+BarangFoto
+  belongsTo Barang
+
+BarangTutorial
+  belongsTo Barang
+
+Paket
+  belongsTo TempatSewa
+  hasMany PaketDetail
+  hasMany BookingDetail
+  hasMany SewaDetail
+  hasMany TagihanDetail
+
+PaketDetail
+  belongsTo Paket
+  belongsTo Barang
+
+Booking
+  belongsTo TempatSewa
+  hasMany BookingDetail
+  hasMany BookingCancel
+  hasOne Sewa
+  hasOne BookingToSewa
+  hasOne Tagihan
+  hasMany StokMutasi
+
+BookingDetail
+  belongsTo Booking
+  belongsTo Barang (nullable)
+  belongsTo Paket (nullable)
+
+BookingCancel
+  belongsTo Booking
+
+Sewa
+  belongsTo TempatSewa
+  belongsTo Booking (nullable)
+  hasMany SewaDetail
+  hasOne BookingToSewa
+  hasOne Tagihan
+  hasMany StokMutasi
+
+SewaDetail
+  belongsTo Sewa
+  belongsTo Barang (nullable)
+  belongsTo Paket (nullable)
+
+BookingToSewa
+  belongsTo Booking
+  belongsTo Sewa
+
+BarangMasuk
+  belongsTo TempatSewa
+  hasMany BarangMasukDetail
+
+BarangMasukDetail
+  belongsTo BarangMasuk
+  belongsTo Barang
+
+Tagihan
+  belongsTo TempatSewa
+  belongsTo Booking (nullable)
+  belongsTo Sewa (nullable)
+  hasMany TagihanDetail
+  hasMany Pembayaran
+
+TagihanDetail
+  belongsTo Tagihan
+  belongsTo Barang (nullable)
+  belongsTo Paket (nullable)
+
+Pembayaran
+  belongsTo Tagihan
+  hasOne Transaksi
+
+Dompet
+  belongsTo TempatSewa
+  hasMany Transaksi
+
+Transaksi
+  belongsTo TempatSewa
+  belongsTo Dompet
+  belongsTo Pembayaran (nullable)
+
+==============================================================
+ALUR DATA UTAMA
+==============================================================
+
+1. BARANG MASUK
+   BarangMasuk -> BarangMasukDetail -> update BarangStok -> catat StokMutasi(tipe=masuk)
+
+2. BOOKING
+   Booking -> BookingDetail -> cek BarangStok.jumlah_tersedia
+   Jika dikonfirmasi:
+      kurangi jumlah_tersedia
+      tambah jumlah_dipesan
+      catat StokMutasi(tipe=reservasi)
+
+3. PEMBATALAN BOOKING
+   Booking -> BookingCancel
+      kurangi jumlah_dipesan
+      tambah jumlah_tersedia
+      catat StokMutasi(tipe=batal_reservasi)
+
+4. BOOKING MENJADI SEWA
+   Booking -> Sewa
+   BookingToSewa menjadi relasi historis
+   stok:
+      jumlah_dipesan -= qty
+      jumlah_disewa += qty
+      catat StokMutasi(tipe=keluar_sewa)
+
+5. PENGEMBALIAN
+   Sewa -> SewaDetail
+   untuk barang kembali baik:
+      jumlah_disewa -= qty
+      jumlah_tersedia += qty
+      StokMutasi(tipe=kembali)
+   untuk barang rusak:
+      jumlah_disewa -= qty
+      jumlah_rusak += qty
+      StokMutasi(tipe=rusak)
+
+6. TAGIHAN
+   Tagihan -> TagihanDetail
+   Tagihan menyimpan snapshot subtotal, diskon, biaya tambahan, total.
+
+7. PEMBAYARAN
+   Tagihan -> Pembayaran
+   Satu tagihan boleh memiliki banyak pembayaran.
+   Pembayaran -> Transaksi -> Dompet
+
+8. PERUBAHAN HARGA
+   Barang.harga / Paket.harga_paket hanya harga master.
+   Transaksi lama memakai TagihanDetail.harga_satuan.
+   Karena itu histori transaksi tetap aman.
+
+==============================================================
+CATATAN IMPLEMENTASI PENTING
+==============================================================
+
+- Jangan mengizinkan jumlah stok negatif.
+- Operasi booking/sewa/pengembalian stok harus memakai DB::transaction().
+- Saat memproses stok, gunakan lockForUpdate() pada BarangStok untuk mencegah dua transaksi mengambil stok yang sama.
+- Jangan memberi Gemini akses SQL langsung. AI hanya menghasilkan intent/parameter; Laravel melakukan query dan perubahan stok.
+- Harga, diskon, dan total transaksi sebaiknya dihitung oleh Laravel, bukan AI.
+- Tagihan adalah sumber utama nilai transaksi; pembayaran adalah arus uang yang masuk/keluar terhadap tagihan.
+- Transaksi adalah catatan arus kas pada dompet; jangan menggunakan transaksi sebagai pengganti pembayaran.
